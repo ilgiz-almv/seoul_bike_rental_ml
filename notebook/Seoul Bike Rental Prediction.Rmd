@@ -1,0 +1,1106 @@
+---
+title: "Seoul Bike Rental Prediction"
+author: "Ilgiz Almukhametov"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Setting global chunk options
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load required libraries
+library(caret)         # Machine learning utilities
+library(corrplot)      # Correlation matrix visualization
+library(dplyr)         # Data manipulation
+library(ggcorrplot)    # Enhanced correlation plots
+library(ggplot2)       # Data visualization
+library(gridExtra)     # Arranging multiple plots
+library(lmtest)        # Statistical tests for linear models
+library(lubridate)     # Date-time manipulation
+library(MASS)          # Statistical functions and models
+library(Metrics)       # Regression and classification metrics
+library(randomForest)  # Random forest implementation
+library(readr)         # Fast data reading
+library(SHAPforxgboost) # SHAP values for XGBoost
+library(xgboost)       # Extreme Gradient Boosting
+
+```
+
+
+# Executive Summary
+
+Seoul’s bike-sharing system provides an eco-friendly transportation alternative, but optimizing bike availability requires accurate demand forecasting. This project leverages machine learning techniques to analyze key environmental, temporal, and seasonal factors influencing bike rentals. Using data from the UCI Machine Learning Repository, I explored trends and developed predictive models, with XGBoost achieving the highest accuracy (R² = 0.918). The analysis revealed that temperature, humidity, and precipitation strongly impact bike demand, while commuting patterns drive peak usage during morning and evening hours. Seasonal trends indicate higher rentals in summer and a decline in winter, reinforcing the need for dynamic bike redistribution strategies. The findings suggest practical applications for optimizing bike distribution, weather-responsive pricing, and resource planning for urban mobility. This project demonstrates expertise in data science, feature engineering, and advanced predictive modeling, contributing to smarter, data-driven transportation solutions.
+
+
+# Introduction
+
+Bike-sharing programs have become an integral part of urban transportation, providing an affordable, convenient, and environmentally friendly alternative to motorized vehicles. These systems allow individuals to rent bicycles from designated stations and return them to any other station within the same network. As metropolitan areas worldwide continue to adopt bike-sharing schemes, they offer numerous benefits, including reduced traffic congestion, lower greenhouse gas emissions, and improved public health through active mobility. Additionally, their low cost incentivizes users to integrate cycling into their daily commutes, further contributing to sustainable urban development.
+
+Accurately predicting bike rental demand is crucial for optimizing bike availability, minimizing operational inefficiencies, and ensuring a smooth user experience. An imbalance in bike distribution can lead to shortages in high-demand areas or excess bicycles in low-usage zones, reducing the overall effectiveness of the system. Therefore, developing a robust predictive model for bike rentals can aid city planners and policymakers in making data-driven decisions to enhance transportation efficiency.
+
+The objective of this study is to leverage machine learning techniques to develop a regression model that forecasts bike rental demand based on various environmental, temporal, and seasonal factors. By analyzing data from Seoul’s bike-sharing system, this project aims to uncover key patterns that influence rental trends. The findings will provide valuable insights for government officials and urban mobility planners, enabling them to optimize bike allocation, improve maintenance strategies, and even introduce dynamic pricing models based on weather conditions.
+
+# Data Understanding
+
+## Data source
+
+The dataset used in this project, titled "Seoul Bike Sharing Demand," was sourced from the UCI Machine Learning Repository:  
+https://archive.ics.uci.edu/dataset/560/seoul+bike+sharing+demand
+
+It comprises hourly records of public bicycle rentals in Seoul, South Korea, along with corresponding weather conditions and date information. The dataset was donated on February 29, 2020, and is publicly accessible under a Creative Commons Attribution 4.0 International (CC BY 4.0) license.
+
+## Description of Features
+
+The dataset contains 8,760 instances and 14 features, detailed as follows:
+
+- Date: The specific day of the record, formatted as day/month/year.
+- Rented Bike Count: The number of bikes rented at each hour.
+- Hour: The hour of the day (0 to 23).
+- Temperature (°C): The temperature in degrees Celsius.
+- Humidity (%): The relative humidity percentage.
+- Wind Speed (m/s): The wind speed in meters per second.
+- Visibility (10m): Visibility in units of 10 meters.
+- Dew Point Temperature (°C): The dew point temperature in degrees Celsius.
+- Solar Radiation (MJ/m²): Solar radiation in megajoules per square meter.
+- Rainfall (mm): Rainfall amount in millimeters.
+- Snowfall (cm): Snowfall amount in centimeters.
+- Seasons: Categorical variable indicating the season — Winter, Spring, Summer, or Autumn.
+- Holiday: Binary variable indicating whether the day is a holiday (Yes) or not (No).
+- Functional Day: Binary variable indicating whether the hour is functional (Yes) or non-functional (No), with non-functional hours typically due to maintenance or other factors.
+
+# Exploratory data analysis (EDA)
+
+## Data Loading and Inspection:
+
+- Loading the dataset
+- Displaying the first few rows to understand the dataset structure
+- Printing dataset dimensions (number of rows and columns) for a quick overview
+
+```{r}
+
+# Define file path
+file_path <- "../data/SeoulBikeData.csv"
+
+# Check if file exists before loading
+if (!file.exists(file_path)) {
+  stop("Error: File 'SeoulBikeData.csv' not found. Please check the working directory.")
+}
+
+# Load dataset
+BikeData <- read_csv(file_path, show_col_types = FALSE, locale = locale(encoding = "ISO-8859-9"))
+
+# Display the first few rows to understand the structure
+print(head(BikeData), width = Inf)
+
+# Print dataset dimensions
+cat("Dataset contains", nrow(BikeData), "rows and", ncol(BikeData), "columns.\n")
+
+```
+
+## Dataset Examination:
+
+- Identify the presence of missing values in the dataset.
+- Check for any duplicate records that may affect data integrity.
+- Summarize key statistical properties of the dataset to understand distributions and trends.
+
+```{r}
+
+# Checking for missing values by column
+missing_values <- colSums(is.na(BikeData))
+missing_values <- missing_values[missing_values > 0]
+
+if (length(missing_values) > 0) {
+  cat("Columns with missing values:\n")
+  print(missing_values)
+} else {
+  cat("No missing values detected in the dataset.\n\n")
+}
+
+# Check for duplicate rows
+duplicate_rows <- sum(duplicated(BikeData))
+cat("Number of duplicate rows:", duplicate_rows, "\n\n")
+
+# Generate descriptive statistics
+cat("Descriptive statistics:\n\n")
+summary(BikeData)
+
+```
+
+**Key Insights from Dataset Examination:**
+
+- The dataset is complete, with no missing or duplicate records.
+- The response variable 'Rented Bike Count' ranges from 0 to 3556, with an average of 704.6, likely exhibiting a right-skewed distribution (Mean > Median).
+- The Date column should be converted into a proper date format, and Hour (0–23) should be treated as a categorical variable to capture peak demand trends.
+- Temperature (°C) varies from -17.8°C to 39.4°C, with an average of 12.88°C.
+- Humidity (%) ranges between 0% and 98%, with a mean of 58.23%.
+- Wind Speed (m/s) ranges from 0 to 7.4 m/s, averaging 1.725 m/s.
+- Visibility (10m) is mostly high, with a median of 1698 meters.
+- Dew Point Temperature (°C) varies from -30.6°C to 27.2°C, with a mean of 4.07°C.
+- Solar Radiation (MJ/m²) is generally low, peaking at 3.52 MJ/m².
+- Rainfall and Snowfall are mostly 0, indicating dry conditions, but occasional non-zero values suggest sporadic precipitation events.
+- Categorical Variables – Seasons, Holiday, and Functioning Day require conversion to factors, and Hour should also be converted to a factor to analyze demand patterns.
+
+
+
+## Data Preprocessing:
+
+- Renaming columns for better readability and usage.
+- Converting the Date column to the proper Date format.
+- Creating a full Datetime column by combining Date and Hour.
+- Extracting Month as a categorical variable.
+- Converting categorical variables into factors.
+- Setting locale to ensure correct month names.
+
+
+```{r}
+
+# Set locale to ensure month names are in English
+Sys.setlocale("LC_TIME", "C")  
+
+# Renaming columns for better readability
+colnames(BikeData) <- c("Date", "RentedBikeCount", "Hour", "Temperature", "Humidity", 
+                        "WindSpeed", "Visibility", "DewPointTemperature", "SolarRadiation", 
+                        "Rainfall", "Snowfall", "Seasons", "Holiday", "FunctioningDay")
+
+# Convert Date column to proper Date format
+BikeData$Date <- as.Date(BikeData$Date, format="%d/%m/%Y")
+
+# Create a full datetime column
+BikeData$Datetime <- as.POSIXct(paste(BikeData$Date, BikeData$Hour), format="%Y-%m-%d %H")
+
+# Create a Month categorical variable
+BikeData$Month <- factor(month(BikeData$Datetime, label = TRUE, abbr = FALSE))
+
+# Convert categorical variables to factors
+factor_vars <- c("Hour", "Month", "Seasons", "Holiday", "FunctioningDay")
+BikeData[factor_vars] <- lapply(BikeData[factor_vars], factor)
+
+# Select categorical and date variables
+categorical_date_vars <- BikeData[, sapply(BikeData, function(x) is.character(x) | 
+                                                         is.factor(x) | 
+                                                         inherits(x, "Date"))]
+
+# Display summary statistics for categorical and date variables
+summary(categorical_date_vars)
+
+```
+
+**Summary of Categorical and Date Variables:**
+
+- Date Range: The dataset spans from December 1, 2017, to November 30, 2018.
+- Hour Distribution: Each hour is probably uniformly represented with 365 occurrences per hour.
+- Seasons: The dataset is evenly distributed across all four seasons (Autumn: 2184, Spring: 2208, Summer: 2208, Winter: 2160).
+- Holidays: 432 instances fall on holidays, while 8328 instances occur on non-holidays.
+- Functioning Days: The majority (8465 instances) are recorded on operational hours, with 295 instances on non-operational hours.
+- Month Distribution: Each month has 744 records, confirming consistent data collection across all months.
+
+
+## Response Variable Analysis
+
+- Distribution of Bike Rentals.
+- Hourly Bike Rentals Over Time.
+- Short-Term Trends in Peak Season.
+
+```{r, fig.width=12, fig.height=7}
+
+# Histogram of bike rentals
+p1 <- ggplot(BikeData, aes(x = RentedBikeCount)) +
+  geom_histogram(fill = "steelblue", bins = 30, alpha = 0.7) +
+  labs(title = "Distribution of\nBike Rentals", x = "Number of Rented Bikes", y = "Frequency") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+# Full Time Series Plot
+p2 <- ggplot(BikeData, aes(x = Datetime, y = RentedBikeCount)) +
+  geom_line(color = "blue", alpha = 0.7) +
+  labs(title = "Hourly Bike Rentals\nOver Time", x = "Datetime", y = "Bike Rentals") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b %Y")
+
+# Filter for two weeks in summer (July 1 to July 14, 2018)
+summer_weeks <- BikeData %>% filter(Date >= "2018-07-01", Date <= "2018-07-14")
+
+# Time Series Plot for 2 Weeks in Summer
+p3 <- ggplot(summer_weeks, aes(x = Datetime, y = RentedBikeCount)) +
+  geom_line(color = "blue", alpha = 0.7) +
+  labs(title = "Hourly Bike Rentals\n(July 1 - July 14, 2018)", x = "Datetime", y = "Bike Rentals") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+  scale_x_datetime(date_breaks = "1 day", date_labels = "%b %d")
+
+# Display plots with reduced height and side-by-side layout
+grid.arrange(p1, p2, p3, ncol = 2, heights = c(1, 1))
+
+```
+
+**Summary of Response Variable: RentedBikeCount**
+
+1. Right-Skewed Distribution – The rental count follows a skewed distribution, resembling a Poisson-like pattern with most values concentrated at lower counts.
+2. Seasonal Trends – Rentals peak in summer and drop in winter, reflecting strong seasonal effects.
+3. Daily Patterns – Clear demand spikes during morning and evening peak hours, likely driven by commuter usage.
+4. Potential for Feature Engineering – Incorporating working vs. non-working days and seasonal variations could enhance predictive modeling.
+
+
+
+### Categorical variables vs response var
+
+```{r, fig.width=12, fig.height=7}
+
+# 1️⃣ Boxplot: Bike Rentals by Hour
+p1 <- ggplot(BikeData, aes(x = Hour, y = RentedBikeCount, fill = Hour)) +
+  geom_boxplot(outlier.color = "red", outlier.size = 1) +
+  labs(title = "Bike Rentals\nby Hour", x = "Hour of the Day", y = "Rented Bike Count") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+# 2️⃣ Boxplot: Bike Rentals by Season
+p2 <- ggplot(BikeData, aes(x = Seasons, y = RentedBikeCount, fill = Seasons)) +
+  geom_boxplot(outlier.color = "red", outlier.size = 1) +
+  labs(title = "Bike Rentals\nby Season", x = "Season", y = "Rented Bike Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+# 3️⃣ Boxplot: Bike Rentals on Holidays vs. Non-Holidays
+p3 <- ggplot(BikeData, aes(x = Holiday, y = RentedBikeCount, fill = Holiday)) +
+  geom_boxplot(outlier.color = "red", outlier.size = 1) +
+  labs(title = "Bike Rentals on\nHolidays vs. Non-Holidays", x = "Holiday", y = "Rented Bike Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+# 4️⃣ Boxplot: Bike Rentals on Functioning vs. Non-Functioning Days
+p4 <- ggplot(BikeData, aes(x = FunctioningDay, y = RentedBikeCount, fill = FunctioningDay)) +
+  geom_boxplot(outlier.color = "red", outlier.size = 1) +
+  labs(title = "Bike Rentals on\nFunctioning vs. Non-Functioning Days", x = "Functioning Day", y = "Rented Bike Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+# 5️⃣ Boxplot: Bike Rentals by Month
+p5 <- ggplot(BikeData, aes(x = Month, y = RentedBikeCount, fill = Month)) +
+  geom_boxplot(outlier.color = "red", outlier.size = 1) +
+  labs(title = "Bike Rentals\nby Month", x = "Month", y = "Rented Bike Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+# Arrange plots in a grid (2 columns, 3 rows for better alignment)
+grid.arrange(p1, p2, p3, p4, p5, ncol = 2, nrow = 3)
+
+
+
+```
+
+**Summary of Categorical Variables Influence:**
+
+1. Hour matters: Bike rentals peak during commuting hours (7-9 AM & 5-9 PM).
+2. Seasonality has a strong effect: Highest rentals in summer, moderate in spring & autumn, lowest in winter.
+3. Holidays slightly reduce demand: Likely due to lower work-related commuting.
+4. Functioning days confirm expectations: No rentals on non-operational days.
+5. Using months instead of seasons might provide better granularity: Monthly trends could reveal more precise patterns.
+
+
+
+## Data Transformation
+
+**Removing FunctioningDay Variable**
+
+The FunctioningDay variable indicates whether the bike-sharing system was operational. On non-operational days (FunctioningDay = No), no rentals occurred (RentedBikeCount = 0) due to system closure.
+
+Since these zero-rental days result from external constraints rather than natural demand fluctuations, keeping them may introduce noise and distort analysis. To maintain analytical integrity, these rows, along with the variable itself, will be removed.
+
+
+```{r}
+
+# Remove non-functioning days and drop the column in one step
+BikeData <- BikeData %>% 
+  dplyr::filter(FunctioningDay == "Yes") %>% 
+  dplyr::select(-FunctioningDay)
+
+```
+
+**Weekdays vs. weekends Analysis**
+
+Analyzing both holidays and weekdays vs. weekends provides deeper insight into bike rental behavior. Since holidays can occur on any day, their impact may be inconsistent, whereas weekdays and weekends naturally differentiate commuting from leisure trends.
+
+- If weekends and holidays show similar rental patterns, it suggests a leisure-driven usage trend.
+- If weekdays exhibit higher demand, it highlights a commuter-driven pattern.
+
+**Creating "Weekday" vs. "Weekend" Variable**
+
+```{r}
+
+# Ensure system locale does not affect weekday names
+Sys.setlocale("LC_TIME", "C")
+
+# Create "Weekday" vs. "Weekend" variable using numeric values
+BikeData$DayType <- ifelse(wday(BikeData$Date) %in% c(1, 7), "Weekend", "Weekday")
+
+# Convert to factor
+BikeData$DayType <- as.factor(BikeData$DayType)
+
+# Verify distribution
+table(BikeData$DayType)
+
+```
+
+**Comparing Bike Rental Trends: Weekdays, Weekends, and Holidays**
+
+```{r, fig.width=12, fig.height=7}
+
+# Subset Data
+NonHoliday_Weekdays <- BikeData %>% filter(Holiday == "No Holiday", DayType == "Weekday")
+NonHoliday_Weekends <- BikeData %>% filter(Holiday == "No Holiday", DayType == "Weekend")
+Holidays <- BikeData %>% filter(Holiday == "Holiday")
+
+# Function to create boxplots
+create_boxplot <- function(data, title) {
+  ggplot(data, aes(x = Hour, y = RentedBikeCount, fill = Hour)) +
+    geom_boxplot(outlier.color = "red", outlier.size = 1) +
+    labs(title = title, x = "Hour of the Day", y = "Rented Bike Count") +
+    theme_minimal() +
+    theme(legend.position = "none",
+          plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+}
+
+# Generate plots
+p1 <- create_boxplot(NonHoliday_Weekdays, "Bike Rentals by Hour\n(Non-Holiday Weekdays)")
+p2 <- create_boxplot(NonHoliday_Weekends, "Bike Rentals by Hour\n(Non-Holiday Weekends)")
+p3 <- create_boxplot(Holidays, "Bike Rentals by Hour\n(Holidays)")
+
+# Arrange plots in a grid (3 side by side)
+grid.arrange(p1, p2, p3, ncol = 2)
+
+```
+
+Summary:
+
+- Weekdays show commute-driven demand, with sharp peaks during morning (7-9 AM) and evening (5-9 PM) rush hours.
+- Weekends and holidays follow leisure-driven patterns, with a gradual increase throughout the day, peaking in the afternoon.
+- Holidays resemble weekends, suggesting that bike-sharing demand depends more on activity context than just the calendar.
+
+
+**Creating the WorkdayType Variable**
+
+Since holidays and weekends exhibit similar rental patterns, they can be grouped into a single category: "Non-Workday", while weekdays (excluding holidays) remain "Workday".
+
+To simplify the dataset without losing relevant information, the original DayType and Holiday variables will be removed after merging.
+
+```{r}
+
+# Create WorkdayType variable: "Workday" vs. "Non-Workday"
+BikeData$WorkdayType <- ifelse(BikeData$Holiday == "Yes" | BikeData$DayType == "Weekend", "Non-Workday", "Workday")
+
+# Convert to factor
+BikeData$WorkdayType <- as.factor(BikeData$WorkdayType)
+
+# Remove redundant columns
+BikeData <- BikeData %>% dplyr::select(-DayType, -Holiday)
+
+```
+
+## Visualizing Distributions of Numerical Features
+
+```{r, fig.width=12, fig.height=6}
+
+# List of continuous variables to plot
+continuous_vars <- c("Temperature", "Humidity", "WindSpeed", "Visibility", 
+                     "DewPointTemperature", "SolarRadiation", "Rainfall", "Snowfall")
+
+# Generate histogram plots
+plots <- lapply(continuous_vars, function(var) {
+  ggplot(BikeData, aes(x = .data[[var]])) +
+    geom_histogram(fill = "steelblue", bins = 30, alpha = 0.7) +
+    labs(title = paste("Distribution of\n", var), x = var, y = "Frequency") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))  # Centered title
+})
+
+# Arrange plots in a grid (3 per row)
+grid.arrange(grobs = plots, ncol = 3)
+
+```
+
+**Summary of Continuous Variables:**
+
+- Temperature – Bimodal distribution with peaks around 0°C and 20°C, spanning -20°C to 40°C, reflecting strong seasonality.
+- Humidity – Right-skewed, with most values between 40-100%, indicating that low humidity is rare.
+- Wind Speed – Right-skewed, primarily between 0-3 m/s, with few occurrences above 6 m/s, suggesting generally calm conditions.
+- Visibility – Highly skewed, with most values at 2000m, indicating a lack of frequent low-visibility conditions.
+- Dew Point Temperature – Bimodal, mirroring temperature trends, reflecting seasonal variations.
+- Solar Radiation – Highly right-skewed, with most values near zero, likely due to cloud cover or nighttime data.
+- Rainfall – Extremely right-skewed, with most values at zero, but occasional high-precipitation events.
+- Snowfall – Similar to rainfall, with the majority at zero, confirming that snowfall is rare.
+
+**Creating Binary Indicators for Extreme Distributions**
+
+Since Visibility, Solar Radiation, Rainfall, and Snowfall exhibit highly skewed distributions, with values predominantly concentrated at a single point and occasional deviations, adding binary indicators can help capture meaningful variations. Introducing these variables enhances interpretability and allows for a more effective analysis of their impact on bike rentals:
+
+```{r, fig.width=12, fig.height=6}
+
+# Create indicator variables
+BikeData <- BikeData %>%
+  mutate(
+    LowVisibility = ifelse(Visibility < 250, 1, 0),
+    HasSolar = ifelse(SolarRadiation > 0, 1, 0),
+    HasRainfall = ifelse(Rainfall > 0, 1, 0),
+    HasSnowfall = ifelse(Snowfall > 0, 1, 0)
+  )
+
+# Convert to factor
+BikeData <- BikeData %>%
+  mutate(across(c(LowVisibility, HasSolar, HasRainfall, HasSnowfall), as.factor))
+
+# Function to create boxplots for binary variables
+create_boxplot <- function(var, title) {
+  ggplot(BikeData, aes(x = .data[[var]], y = RentedBikeCount, fill = .data[[var]])) +
+    geom_boxplot(outlier.color = "red", outlier.size = 1) +
+    labs(title = title, x = var, y = "Rented Bike Count") +
+    theme_minimal() +
+    theme(legend.position = "none",
+          plot.title = element_text(size = 12, face = "bold", hjust = 0.5))  # Centered title
+}
+
+# Generate plots
+p1 <- create_boxplot("LowVisibility", "Impact of Low Visibility\non Bike Rentals")
+p2 <- create_boxplot("HasSolar", "Impact of Solar Radiation\non Bike Rentals")
+p3 <- create_boxplot("HasRainfall", "Impact of Rainfall\non Bike Rentals")
+p4 <- create_boxplot("HasSnowfall", "Impact of Snowfall\non Bike Rentals")
+
+# Arrange plots in a 2x2 grid
+grid.arrange(p1, p2, p3, p4, ncol = 2, nrow = 2)
+
+
+```
+
+**Impact of Environmental Factors on Bike Rentals:**
+
+- Low Visibility reduces rentals – Median rentals are significantly lower when visibility drops below 250m, suggesting adverse conditions discourage biking.
+- Solar Radiation increases rentals – Higher rentals during sunny hours indicate that clear weather creates favorable conditions for biking.
+- Precipitation strongly decreases rentals – Rain and snow drastically reduce demand, with median rentals approaching zero, confirming that wet conditions discourage bike usage.
+
+These insights validate the importance of environmental conditions in bike-sharing demand. The creation of binary indicators proves useful in distinguishing the impact of extreme weather conditions, making these features potentially valuable for predictive modeling.
+
+
+**Numerical variables vs response var**
+
+Since the response variable RentedBikeCount represents count data, it follows a Poisson-like distribution. Count data often exhibit right skewness, which can distort relationships in regression models. To address this, it is better to analyze both:
+
+- Raw count values to observe direct relationships with environmental factors.
+- Log-transformed values to stabilize variance and improve linearity.
+
+The following visualization presents scatter plots of bike rentals vs. numerical variables in a controlled subset (Workdays, No Precipitation (95% of data), Midday Hours, and a specific Season) to better isolate trends. This selection helps reduce variability caused by external factors, making it easier to observe distinct relationships between variables. Both raw and log-transformed responses are displayed side by side for clarity.
+
+```{r, fig.width=12, fig.height=20}
+
+# Filter dataset for Workdays, No Precipitation, and Midday Hours (11 AM - 2 PM)
+filtered_data <- BikeData %>%
+  filter(
+    WorkdayType == "Workday" & HasRainfall == 0
+    & HasSnowfall == 0 & LowVisibility == 0
+    & Hour %in% c(11, 12, 13, 14)
+    & Seasons %in% c("Summer", "Winter")  # Keep only Summer & Winter for comparison
+  )
+
+# Apply log transformation to the response variable (adding +1 to avoid log(0))
+filtered_data <- filtered_data %>%
+  mutate(LogRentedBikeCount = log(RentedBikeCount + 1))
+
+# List of continuous variables to plot
+continuous_vars <- c("Temperature", "Humidity", "WindSpeed", "Visibility", 
+                     "DewPointTemperature", "SolarRadiation")
+
+# Function to create paired scatter plots (Raw vs Log Response)
+create_scatterplots <- function(var) {
+  # Scatter plot for raw count response
+  p1 <- ggplot(filtered_data, aes(x = .data[[var]], y = RentedBikeCount, color = Seasons)) +
+    geom_point(alpha = 0.5, size = 1) +  # Color points by season
+    geom_smooth(method = "lm", se = FALSE, linetype = "dashed", aes(color = Seasons)) +  # Separate trend lines
+    labs(title = paste("Bike Rentals vs", var, "(Summer vs Winter)"),
+         x = var, y = "Rented Bike Count", color = "Season") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+  # Scatter plot for log-transformed response
+  p2 <- ggplot(filtered_data, aes(x = .data[[var]], y = LogRentedBikeCount, color = Seasons)) +
+    geom_point(alpha = 0.5, size = 1) +  # Color points by season
+    geom_smooth(method = "lm", se = FALSE, linetype = "dashed", aes(color = Seasons)) +  # Separate trend lines
+    labs(title = paste("Log(Bike Rentals) vs", var, "(Summer vs Winter)"),
+         x = var, y = "Log(Rented Bike Count)", color = "Season") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+  return(list(p1, p2))  # Return both plots as a list
+}
+
+# Generate plots for all continuous variables
+all_plots <- unlist(lapply(continuous_vars, create_scatterplots), recursive = FALSE)
+
+# Arrange plots in a grid (2 per row: Raw vs Log)
+grid.arrange(grobs = all_plots, ncol = 2)
+
+
+```
+
+**Key Takeaways from Scatter Plots:**
+
+- Since the response variable exhibits right skewness and the relationships with the independent variables become more linear after log transformation due to variance stabilization, applying a logarithmic transformation is preferable for linear modeling.
+- Seasonality is a critical factor, with significantly lower rentals in Winter on all graphs.
+- Temperature is a key predictor with opposite slopes in Summer (negative) and Winter (positive). Interaction terms (Temperature × Season) should be included in linear models.
+- Some of the graphs also have different slopes depending on the season, suggesting that interactions of variables need to be taken into account when constructing a linear regression.
+- Poisson and Negative Binomial models should be tested for count data.
+- Some variables show low predictive power (almost zero slope), especially in winter.
+
+
+```{r}
+
+# because there are no zeros in the data
+BikeData$LogRentedBikeCount <- log(BikeData$RentedBikeCount)
+
+```
+
+
+**Correlation Matrix Analysis:**
+
+Correlation matrices are constructed for each season. To minimize external influences, the analysis focuses on workdays, no precipitation (covering ~95% of the data), midday hours with similar demand, and high visibility conditions. This controlled subset helps isolate seasonal patterns in bike rental behavior.
+
+```{r, fig.width=12, fig.height=12}
+
+# Filter dataset separately for each season
+summer_data <- BikeData %>%
+  filter(
+    WorkdayType == "Workday" & HasRainfall == 0
+    & HasSnowfall == 0 & LowVisibility == 0
+    & Hour %in% c(11, 12, 13, 14) &
+    Seasons == "Summer"
+  )
+
+winter_data <- BikeData %>%
+  filter(
+    WorkdayType == "Workday" & HasRainfall == 0
+    & HasSnowfall == 0 & LowVisibility == 0
+    & Hour %in% c(11, 12, 13, 14) &
+    Seasons == "Winter"
+  )
+
+spring_data <- BikeData %>%
+  filter(
+    WorkdayType == "Workday" & HasRainfall == 0
+    & HasSnowfall == 0 & LowVisibility == 0
+    & Hour %in% c(11, 12, 13, 14) &
+    Seasons == "Spring"
+  )
+
+autumn_data <- BikeData %>%
+  filter(
+    WorkdayType == "Workday" & HasRainfall == 0
+    & HasSnowfall == 0 & LowVisibility == 0
+    & Hour %in% c(11, 12, 13, 14) &
+    Seasons == "Autumn"
+  )
+
+# Select only numeric variables for correlation analysis
+numeric_vars <- c("LogRentedBikeCount", "Temperature", "Humidity", "WindSpeed", "Visibility", 
+                  "DewPointTemperature", "SolarRadiation")
+
+# Compute correlation matrices
+summer_cor_matrix <- cor(summer_data %>% dplyr::select(all_of(numeric_vars)), use = "complete.obs")
+winter_cor_matrix <- cor(winter_data %>% dplyr::select(all_of(numeric_vars)), use = "complete.obs")
+spring_cor_matrix <- cor(spring_data %>% dplyr::select(all_of(numeric_vars)), use = "complete.obs")
+autumn_cor_matrix <- cor(autumn_data %>% dplyr::select(all_of(numeric_vars)), use = "complete.obs")
+
+# Generate correlation plots
+p1 <- ggcorrplot(summer_cor_matrix, method = "circle", type = "lower",
+                 lab = TRUE, lab_size = 4, colors = c("blue", "white", "red"),
+                 title = "Correlation Matrix (Summer)", ggtheme = theme_minimal())
+
+p2 <- ggcorrplot(winter_cor_matrix, method = "circle", type = "lower",
+                 lab = TRUE, lab_size = 4, colors = c("blue", "white", "red"),
+                 title = "Correlation Matrix (Winter)", ggtheme = theme_minimal())
+
+p3 <- ggcorrplot(spring_cor_matrix, method = "circle", type = "lower",
+                 lab = TRUE, lab_size = 4, colors = c("blue", "white", "red"),
+                 title = "Correlation Matrix (Spring)", ggtheme = theme_minimal())
+
+p4 <- ggcorrplot(autumn_cor_matrix, method = "circle", type = "lower",
+                 lab = TRUE, lab_size = 4, colors = c("blue", "white", "red"),
+                 title = "Correlation Matrix (Autumn)", ggtheme = theme_minimal())
+
+# Arrange all four plots in a grid (2x2)
+grid.arrange(p1, p2, p3, p4, ncol = 2, nrow = 2)
+
+
+```
+
+**Key Findings from the Correlation Matrix:**
+
+- Temperature is a key predictor, exhibiting a positive correlation in Spring, Autumn, and Winter, but a negative correlation in Summer. This suggests the need to account for seasonal interactions with temperature, potentially incorporating polynomial terms to model non-linear effects across different seasons.
+- Humidity shows negligible correlation in Winter and Summer but demonstrates a strong negative correlation in Spring and Autumn. Given that precipitation is excluded from the analysis, this may indicate that high humidity negatively impacts bike demand in these seasons due to wet or muddy road conditions.
+- Wind Speed has a minimal effect in Summer, Spring, and Autumn, implying little influence on rental demand. However, in Winter, higher wind speeds slightly reduce bike rentals, likely due to increased discomfort in cold conditions.
+- Visibility is only significant in Autumn (0.4), suggesting that clearer visibility conditions may encourage higher demand during this season.
+- Dew Point Temperature exhibits strong correlations in Winter and Summer, with opposite signs similar to temperature, indicating that it may capture seasonal effects related to temperature-driven demand patterns.
+- Solar Radiation shows a significant positive correlation in Spring and Autumn, emphasizing the impact of sunny weather on increased bike demand during these transitional seasons.
+
+
+**Key Modeling Considerations:**
+
+- Include interaction terms (Temperature × Season, Humidity × Season, DewPointTemperature × Season, SolarRadiation × Season) to capture season-dependent effects.
+- Consider polynomial terms for Temperature and Humidity to account for non-linear relationships observed in some seasons.
+- Test excluding Wind Speed and Visibility due to their weak or inconsistent correlations with bike rentals.
+
+
+# Modelling
+
+## Linear Regression  
+
+Linear regression is a fundamental statistical method that serves as a reliable baseline for predictive analysis. Before applying complex machine learning algorithms, it is essential to develop a simple and interpretable model to assess linear relationships in the data and the significance of key predictors.  
+
+In this section, two linear regression models are built:  
+- **Basic Model**: Includes key environmental and temporal predictors.  
+- **Enhanced Model**: Incorporates polynomial features and interaction terms to capture non-linear effects and seasonal dependencies.  
+
+```{r}
+
+# Select relevant variables
+model_data <- BikeData %>%
+  dplyr::select(RentedBikeCount, LogRentedBikeCount, Hour, Temperature, Humidity, WindSpeed, Visibility, DewPointTemperature, SolarRadiation, Rainfall, Snowfall,
+                Seasons, Month, WorkdayType, LowVisibility, HasSolar, HasRainfall, HasSnowfall)
+
+# Convert categorical variables to factors
+factor_vars <- c("Hour", "Month", "Seasons", "WorkdayType", "LowVisibility", "HasSolar", "HasRainfall", "HasSnowfall")
+model_data[factor_vars] <- lapply(model_data[factor_vars], as.factor)
+
+# Add polynomial features for Temperature and Humidity
+model_data <- model_data %>%
+  mutate(
+    Temperature2 = Temperature^2, 
+    Temperature3 = Temperature^3,
+    Humidity2 = Humidity^2,
+    Humidity3 = Humidity^3
+  )
+
+# Split into train/test sets
+set.seed(123)
+train_index <- createDataPartition(model_data$LogRentedBikeCount, p = 0.8, list = FALSE)
+train_data <- model_data[train_index, ]
+test_data <- model_data[-train_index, ]
+
+# Fit linear regression model basic
+lm_model1 <- lm(LogRentedBikeCount ~ Temperature + Humidity + WindSpeed + Visibility +
+               SolarRadiation + Rainfall + Snowfall + Seasons + 
+               Hour + WorkdayType + LowVisibility + HasSolar + HasRainfall + HasSnowfall, 
+               data = train_data)
+
+lm_model2 <- lm(LogRentedBikeCount ~ Temperature + Humidity + WindSpeed +
+                  SolarRadiation + Rainfall + Snowfall + Month + 
+                  Hour + WorkdayType + LowVisibility + HasSolar + HasRainfall +
+                  Month * Temperature + Month * Humidity +
+                  Hour * WorkdayType + Temperature2 + Temperature3 + Humidity2 + Humidity3 +
+                  HasSnowfall, data = train_data)
+
+# Summary of linear regression models
+print(summary(lm_model1))
+print(summary(lm_model2))
+
+```
+
+**Baseline vs. Enhanced Model Performance:**
+
+- The baseline model achieves an R² of 0.774, while the enhanced model improves it to 0.854, indicating a significantly better explanatory power.
+- The residual standard error (RSE) decreases from 0.5526 to 0.446, meaning the enhanced model provides a better fit and lower prediction error.
+- These improvements suggest that incorporating polynomial transformations and interaction terms enhances the model’s ability to capture complex relationships.
+
+### Residual Diagnostics and Model Validation of Linear Regression on Test Data.
+
+```{r}
+
+# Residuals vs. Fitted Values plot
+plot(lm_model2$fitted.values, lm_model2$residuals, 
+     xlab = "Fitted Values", ylab = "Residuals", 
+     main = "Residuals vs. Fitted Values",
+     pch = 20, col = "blue")
+
+# Add LOWESS smooth line (local regression)
+lines(lowess(lm_model2$fitted.values, lm_model2$residuals), col = "red", lwd = 2)
+
+# Add a horizontal reference line at 0
+abline(h = 0, col = "black", lwd = 2, lty = 2)
+
+# Perform Breusch-Pagan test for heteroscedasticity
+bptest(lm_model2)
+
+# Predict on test data (log scale)
+log_lm_pred <- predict(lm_model2, test_data)
+
+# Reverse transformation (convert log predictions back to original scale)
+lm_pred <- exp(log_lm_pred)
+
+# Actual values from test data
+test_y <- test_data$RentedBikeCount
+
+# Function to compute evaluation metrics
+calculate_metrics <- function(actual, predicted) {
+  data.frame(
+    RMSE = rmse(actual, predicted),
+    MAE = mae(actual, predicted),
+    R2 = cor(actual, predicted)^2
+  )
+}
+
+# Evaluate model performance on test data
+results <- calculate_metrics(test_y, lm_pred) %>% 
+  mutate(Model = "Linear Regression")
+
+# Print evaluation results
+# print(results)
+
+
+# Scatter plot: Actual vs Predicted values with full external border
+ggplot(data.frame(Actual = test_y, Predicted = lm_pred), aes(x = Actual, y = Predicted)) +
+  geom_point(color = "darkorange", alpha = 0.4) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(
+    title = "Linear Regression:\nRented Bike Count (Test Data)",
+    x = "Actual Count",
+    y = "Predicted Count"
+  ) +
+  theme_minimal() +
+  theme(
+    aspect.ratio = 0.8,  # Ensures a square plot
+    plot.background = element_rect(color = "black", fill = NA, size = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5)
+  ) +
+  # Adding text with evaluation metrics inside the rectangle
+  annotate("text", x = max(test_y) * 0.825, y = max(lm_pred) * 0.15,
+           label = paste0("RMSE = ", round(results$RMSE, 2), "\n",
+                          "MAE = ", round(results$MAE, 2), "\n",
+                          "R² = ", round(results$R2, 3)),
+           color = "black", hjust = 0.5, size = 4)
+
+
+```
+
+
+**Summary of Model Performance & Residual Analysis:**
+
+- Residuals vs. Fitted Plot: The residuals show trends: on one side the dispersion narrows towards the edge, on the other side it expands, suggesting heteroscedasticity, meaning variance is not constant across fitted values.
+- Breusch-Pagan Test: The test confirms heteroscedasticity (p-value < 2.2e-16), indicating that residual variance depends on predictors.
+- Actual vs. Predicted Plot: Predictions closely follow the y = x line, indicating a strong correlation between actual and predicted values.
+- R² Score: The R² value of 0.845 indicates that the model explains 84.5% of the variance in bike rentals.
+- Overall Model Performance: While the model captures most variance well, heteroscedasticity suggests that error distribution may need further refinement, such as using weighted regression or transformation techniques.
+
+Although the model improves significantly with polynomial features and interaction terms, the detected heteroscedasticity suggests the presence of complex relationships that have not been fully accounted for. To further enhance predictive performance, it is advisable to explore more advanced models, such as Poisson Regression (GLM with log link), Negative Binomial Regression (handles overdispersion), XGBoost, or random forest, which can better capture non-linear dependencies and intricate feature interactions.
+
+## Advanced ML-models
+
+```{r}
+
+# Select relevant variables
+model_data <- BikeData %>%
+  dplyr::select(RentedBikeCount, Hour, Temperature, Humidity, WindSpeed, Visibility, 
+                DewPointTemperature, SolarRadiation, Rainfall, Snowfall,
+                Month, WorkdayType, LowVisibility, HasSolar, HasRainfall, HasSnowfall)
+
+# Convert categorical variables to factors (for Poisson, Negative Binomial, and Random Forest)
+factor_vars <- c("Hour", "Month", "WorkdayType", "LowVisibility", "HasSolar", "HasRainfall", "HasSnowfall")
+model_data[factor_vars] <- lapply(model_data[factor_vars], as.factor)
+
+# Split data into train/test sets
+set.seed(123)
+train_index <- createDataPartition(model_data$RentedBikeCount, p = 0.8, list = FALSE)
+train_data <- model_data[train_index, ]
+test_data <- model_data[-train_index, ]
+
+# One-Hot Encoding for XGBoost
+dummies <- dummyVars(" ~ .", data = model_data, fullRank = TRUE)
+model_data_xgb <- as.data.frame(predict(dummies, newdata = model_data))
+
+# Prepare XGBoost train/test sets
+train_xgb <- model_data_xgb[train_index, ] %>% dplyr::select(-RentedBikeCount)
+test_xgb <- model_data_xgb[-train_index, ] %>% dplyr::select(-RentedBikeCount)
+
+# Prepare data for other models
+train_x <- train_data %>% dplyr::select(-RentedBikeCount)
+train_y <- train_data$RentedBikeCount
+test_x <- test_data %>% dplyr::select(-RentedBikeCount)
+test_y <- test_data$RentedBikeCount
+
+### 1. Poisson Regression Model
+poisson_glm <- glm(RentedBikeCount ~ Temperature + Humidity + WindSpeed + 
+                    SolarRadiation + Rainfall + Snowfall + Month + 
+                    Hour + WorkdayType + LowVisibility + HasSolar + HasRainfall +
+                    poly(Temperature, 3) + poly(Humidity, 3) + 
+                    Month * Temperature + Month * Humidity + 
+                    Hour * WorkdayType, 
+                    family = poisson(link = "log"), 
+                    data = train_data)
+
+poisson_pred <- predict(poisson_glm, test_data, type = "response")
+
+### 2. Negative Binomial Regression Model
+neg_binom_model <- glm.nb(RentedBikeCount ~ Temperature + Humidity + WindSpeed + 
+                            SolarRadiation + Rainfall + Snowfall + Month + 
+                            Hour + WorkdayType + LowVisibility + HasSolar + HasRainfall +
+                            poly(Temperature, 3) + poly(Humidity, 3) + 
+                            Month * Temperature + Month * Humidity + 
+                            Hour * WorkdayType, 
+                            data = train_data)
+
+neg_binom_pred <- predict(neg_binom_model, test_data, type = "response")
+
+### 3. Random Forest Model
+set.seed(123)
+rf_model <- randomForest(x = train_x, y = train_y, ntree = 500, mtry = 5)
+rf_pred <- predict(rf_model, test_x)
+
+### 4. XGBoost Model
+set.seed(123)
+xgb_train <- xgb.DMatrix(data = as.matrix(train_xgb), label = train_y)
+xgb_test <- xgb.DMatrix(data = as.matrix(test_xgb))
+
+xgb_model <- xgboost(data = xgb_train, 
+                     objective = "reg:squarederror", 
+                     nrounds = 200, 
+                     max_depth = 6, 
+                     eta = 0.1, 
+                     subsample = 0.8, 
+                     colsample_bytree = 0.8, 
+                     verbose = 0)
+
+xgb_pred <- predict(xgb_model, xgb_test)
+
+### Function to Calculate Evaluation Metrics
+calculate_metrics <- function(true, pred) {
+  data.frame(
+    RMSE = rmse(true, pred),
+    MAE = mae(true, pred),
+    R2 = cor(true, pred)^2
+  )
+}
+
+### Create Final Comparison Table
+final_results <- bind_rows(
+  calculate_metrics(test_y, poisson_pred) %>% mutate(Model = "Poisson Regression"),
+  calculate_metrics(test_y, neg_binom_pred) %>% mutate(Model = "Negative Binomial Regression"),
+  calculate_metrics(test_y, rf_pred) %>% mutate(Model = "Random Forest"),
+  calculate_metrics(test_y, xgb_pred) %>% mutate(Model = "XGBoost")
+)
+
+# Print final results
+print(final_results)
+
+
+```
+
+**Summary of Model Performance:**
+
+- XGBoost achieved the best performance, with the lowest RMSE (183.97), lowest MAE (112.31), and the highest R² (0.918), making it the most accurate model.
+- Random Forest performed slightly worse than XGBoost but still provided strong results (RMSE = 190.62, R² = 0.913), making it a good alternative.
+- Poisson Regression outperformed Negative Binomial Regression, despite the dataset exhibiting overdispersion, with lower RMSE (210.89 vs. 242.62) and higher R² (0.892 vs. 0.859).
+- Negative Binomial Regression showed the weakest performance, likely because it was unable to fully account for the complexity of the data.
+- Tree-based models (Random Forest & XGBoost) significantly outperformed GLMs, indicating that non-linear relationships and interactions are important for accurate bike rental predictions.
+
+In practice, the next logical step would be to further fine-tune the hyperparameters of the best-performing models to maximize predictive accuracy. However, as this project was conducted for portfolio purposes, the achieved results are already strong and sufficiently demonstrate advanced modeling techniques. Therefore, additional optimization can be considered outside the scope of this work.
+
+Final scatterplot of actual and predicted values on XGBoost model test data:
+
+```{r}
+
+# Create a dataframe for plotting
+plot_data <- data.frame(
+  Actual = test_y,
+  XGB_Predicted = xgb_pred
+)
+
+# Model metrics for XGBoost
+metrics_text_xgb <- paste(
+  "RMSE =", round(final_results$RMSE[final_results$Model == "XGBoost"], 2),
+  "\nMAE =", round(final_results$MAE[final_results$Model == "XGBoost"], 2),
+  "\nR2 =", round(final_results$R2[final_results$Model == "XGBoost"], 3)
+)
+
+# Scatter plot: Actual vs Predicted values with full external border
+p1 <- ggplot(plot_data, aes(x = Actual, y = XGB_Predicted)) +
+  geom_point(color = "blue", alpha = 0.4) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(
+    title = "XGBoost:\nRented Bike Count (Test Data)",
+    x = "Actual Count",
+    y = "Predicted Count"
+  ) +
+  theme_minimal() +
+  theme(
+    aspect.ratio = 0.8,  # Ensures a square plot
+    plot.background = element_rect(color = "black", fill = NA, size = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5)
+  ) +
+  # Adding text with evaluation metrics inside the rectangle
+  annotate("text", x = max(test_y) * 0.825, y = max(lm_pred) * 0.15,
+           label = metrics_text_xgb,
+           color = "black", hjust = 0.5, size = 4)
+
+# Display plot
+print(p1)
+
+
+```
+
+The XGBoost model shows strong predictive performance with an R² of 0.917, indicating a high correlation between actual and predicted values. Most points align well with the diagonal, suggesting accurate predictions, though some deviations appear at higher counts. The error metrics (RMSE = 184.24, MAE = 113.62) indicate relatively low prediction errors. Additionally, the data is densely concentrated at lower counts, which the model captures effectively.
+
+### SHAP visualization
+
+```{r, fig.width=12, fig.height=10}
+
+# Ensure X_train is a matrix, not xgb.DMatrix
+X_train_matrix <- as.matrix(train_xgb)
+
+# Compute SHAP values
+shap_values <- shap.values(xgb_model = xgb_model, X_train = X_train_matrix)
+
+# Prepare data for visualization
+shap_long <- shap.prep(xgb_model = xgb_model, X_train = X_train_matrix)
+
+# Generate summary plot
+shap.plot.summary(shap_long)
+
+# Generate dependence plot for a specific feature, e.g., 'Temperature'
+shap.plot.dependence(data_long = shap_long, x = 'Temperature', y = 'Temperature')
+
+
+```
+
+Key Takeaways:
+
+- **Temperature:** The most influential factor in bike sharing. Higher temperatures generally increase demand, while very low temperatures reduce it. However, the temperature SHAP plot shows that demand starts to decline when the temperature exceeds approximately 25°C.
+- **Humidity:** A significant factor; high humidity tends to reduce bike usage, likely due to discomfort.
+- **Solar Radiation:** Higher solar radiation is associated with increased bike rentals, possibly due to better weather conditions.
+- **Hour of the Day:** Certain hours, such as morning and evening rush hours, have a strong positive effect due to commuting patterns.
+- **Month:** Seasonality plays a role; warmer months tend to have higher demand, while colder months see reduced rentals.
+- **Workday Type:** Demand differs between workdays and non-workdays, with workdays generally experiencing higher demand for bike sharing.
+- **Dew Point Temperature:** High dew point values reduce demand, while lower values increase it.
+- **Rainfall:** Even small amounts of rainfall negatively impact bike demand, discouraging usage.
+- **Wind Speed & Visibility:** Moderate or low impact; strong winds and low visibility slightly reduce bike rentals.
+- **Snowfall:** Negatively affects bike sharing, although its impact is lower than that of rainfall due to fewer snowfall events.
+
+
+
+# Conclusion & Key Takeaways
+
+This project successfully developed a predictive model for bike-sharing demand in Seoul, leveraging machine learning techniques to analyze key environmental and temporal factors. The findings highlight critical insights for urban mobility and resource optimization.
+
+**Key Insights from the Analysis:**
+
+- Temperature & Weather Conditions Matter – Temperature is the dominant factor affecting bike demand, but extreme heat (>25°C) and cold reduce rentals. Rainfall and high humidity also significantly discourage bike usage.
+- Commuting Patterns Are Key – Demand spikes during morning and evening rush hours, confirming the influence of commuter behavior. Weekdays exhibit stronger demand than weekends and holidays.
+- Seasonality Drives Usage Trends – Summer sees the highest rentals, while winter demand drops significantly. Seasonal interactions with temperature and humidity further influence patterns.
+- Machine Learning Unlocks Accuracy – XGBoost outperformed all other models, achieving an R² of 0.918, making it the most reliable predictor of bike demand. Tree-based models proved superior to traditional regression techniques due to their ability to capture complex interactions and non-linear relationships.
+
+**Potential Applications & Future Enhancements:**
+
+- Smart Bike Redistribution – Insights from this model can help city officials dynamically allocate bikes based on predicted demand, reducing shortages in peak areas.
+- Weather-Responsive Pricing & Promotions – Offering discounts during lower-demand weather conditions (e.g., high humidity, mild rain) could improve utilization rates.
+- Real-Time Demand Forecasting – Integrating this model with IoT-based bike tracking could enable real-time adjustments, optimizing station availability and maintenance scheduling.
+- Further Model Refinements – Fine-tuning hyperparameters and incorporating real-time traffic or event data could further improve prediction accuracy.
+
+By demonstrating expertise in exploratory data analysis, feature engineering, and advanced machine learning techniques, this project showcases valuable skills in data science, predictive modeling, and urban analytics—essential for solving real-world mobility challenges.
+
+
+```{r, include=FALSE}
+
+# This chunk is designed to compare the original linear regression without feature engineering, identify relationships, and account for polynomial terms.
+
+# Define file path
+file_path <- "../data/SeoulBikeData.csv"
+
+# Check if file exists before loading
+if (!file.exists(file_path)) {
+  stop("Error: File 'SeoulBikeData.csv' not found. Please check the working directory.")
+}
+
+# Load dataset
+BikeData_temp <- read_csv(file_path, show_col_types = FALSE, locale = locale(encoding = "ISO-8859-9"))
+
+
+# Set locale to ensure month names are in English
+Sys.setlocale("LC_TIME", "C")  
+
+# Renaming columns for better readability
+colnames(BikeData_temp) <- c("Date", "RentedBikeCount", "Hour", "Temperature", "Humidity", 
+                        "WindSpeed", "Visibility", "DewPointTemperature", "SolarRadiation", 
+                        "Rainfall", "Snowfall", "Seasons", "Holiday", "FunctioningDay")
+
+BikeData_temp <- BikeData_temp %>%
+  dplyr::mutate(LogRentedBikeCount = log(RentedBikeCount + 1))
+
+BikeData_temp <- BikeData_temp %>%
+  dplyr::select(-Date, -RentedBikeCount)
+
+# Convert categorical variables to factors
+factor_vars <- c("Hour", "Seasons", "Holiday", "FunctioningDay")
+BikeData_temp[factor_vars] <- lapply(BikeData_temp[factor_vars], factor)
+
+set.seed(123)
+train_index <- createDataPartition(BikeData_temp$LogRentedBikeCount, p = 0.8, list = FALSE)
+
+train_data <- BikeData_temp[train_index, ]
+test_data <- BikeData_temp[-train_index, ]
+
+model <- lm(LogRentedBikeCount ~ ., data = train_data)
+
+test_data$predicted_log <- predict(model, newdata = test_data)
+
+test_data$predicted_rentals <- exp(test_data$predicted_log) - 1
+test_data$actual_rentals <- exp(test_data$LogRentedBikeCount) - 1
+
+
+# Function to compute evaluation metrics
+calculate_metrics <- function(actual, predicted) {
+  data.frame(
+    RMSE = rmse(actual, predicted),
+    MAE = mae(actual, predicted),
+    R2 = cor(actual, predicted)^2
+  )
+}
+
+# Evaluate model performance on test data
+results <- calculate_metrics(test_data$actual_rentals, test_data$predicted_rentals) %>% 
+  mutate(Model = "Linear Regression")
+
+# Scatter plot: Actual vs Predicted values with full external border and annotation
+ggplot(test_data, aes(x = actual_rentals, y = predicted_rentals)) +
+  geom_point(color = "darkorange", alpha = 0.4) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(
+    title = "Linear Regression:\nRented Bike Count (Test Data)",
+    x = "Actual Count",
+    y = "Predicted Count"
+  ) +
+  theme_minimal() +
+  theme(
+    aspect.ratio = 0.8,  # Ensures a square plot
+    plot.background = element_rect(color = "black", fill = NA, size = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5)
+  ) +
+  annotate("text", x = max(test_data$actual_rentals) * 0.75, 
+           y = max(test_data$predicted_rentals) * 0.15, 
+           label = paste("RMSE:", round(results$RMSE, 2), 
+                         "\nMAE:", round(results$MAE, 2), 
+                         "\nR²:", round(results$R2, 2)),
+           hjust = 0, size = 4, color = "black")
+
+
+
+```
+
+
+
+
+
+
+
+
+
+

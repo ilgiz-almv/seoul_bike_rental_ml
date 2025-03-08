@@ -1,0 +1,15 @@
+# Ignore R environment files
+.RData
+.Rhistory
+
+# Ignore temporary files and cache
+*.Rproj
+.Ruserdata
+
+# Ignore operating system files
+.DS_Store  # macOS
+Thumbs.db  # Windows
+
+# Ignore IDE configuration files
+.vscode/
+.idea/
